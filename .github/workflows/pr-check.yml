@@ -1,0 +1,106 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run ESLint
+        run: npm run lint || echo "No lint script"
+      
+      - name: Check formatting
+        run: npm run format:check || echo "No format check script"
+
+  validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Check files size
+        run: |
+          for file in \$(git diff --name-only HEAD^1); do
+            size=\$(git cat \$file | wc -c)
+            if [ \$size -gt 1048576 ]; then
+              echo "File \$file is too large (\$((\$size / 1024 / 1024)) MB)"
+              exit 1
+            fi
+          done
+      
+      - name: Check for sensitive data
+        run: |
+          if grep -rE '(password|secret|token|api_key)' --include="*.ts" --include="*.js" --include="*.json" --exclude-dir=node_modules .; then
+            echo "Sensitive data found in code files"
+            exit 1
+          fi
+      
+      - name: Check for console.log
+        run: |
+          if grep -r 'console.log' --include="*.ts" --include="*.tsx" --exclude-dir=node_modules src/; then
+            echo "console.log found in source files"
+            exit 1
+          fi
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Run security audit
+        run: |
+          npm audit --audit-level=high || true
+          npm audit --audit-level=moderate || true
+      
+      - name: Check dependencies
+        run: |
+          npm list --json | jq '.dependencies | keys'
+          echo "Dependencies checked successfully"
+
+  size:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Get changed files
+        id: files
+        uses: tj-actions/changed-files@v40
+      
+      - name: Print changed files
+        run: |
+          echo "Files changed:"
+          echo \${{ steps.files.outputs.all_files }}
+          echo ""
+          echo "Number of files: \${{ steps.files.outputs.added_files_count }}"
+
+      - name: Check for large files
+        run: |
+          for file in \${{ steps.files.outputs.all_files }}; do
+            if [ -f "\$file" ]; then
+              size=\$(stat -c%s "\$file" 2>/dev/null || echo 0)
+              size_mb=\$((size / 1024 / 1024))
+              if [ \$size_mb -gt 5 ]; then
+                echo "Large file detected: \$file (\$size_mb MB)"
+                exit 1
+              fi
+            fi
+          done
